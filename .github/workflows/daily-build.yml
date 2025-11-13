@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       databases:
-        description: 'Databases to build (comma-separated: mysql,postgres,percona-server,valkey or "all")'
+        description: 'Databases to build (comma-separated: mysql,postgres or "all")'
         required: false
         default: 'all'
 
@@ -30,7 +30,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.databases }}" != "all" ]; then
             DBS=$(echo "${{ github.event.inputs.databases }}" | jq -R 'split(",") | map(select(length > 0))')
           else
-            DBS='["mysql","postgres","percona-server","valkey"]'
+            DBS='["mysql","postgres"]'
           fi
           echo "databases=$DBS" >> $GITHUB_OUTPUT
 
