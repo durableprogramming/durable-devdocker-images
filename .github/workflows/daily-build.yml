@@ -1,0 +1,122 @@
+name: Daily Docker Image Builds
+
+on:
+  schedule:
+    # Run daily at 2:00 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      databases:
+        description: 'Databases to build (comma-separated: mysql,postgres,percona-server,valkey or "all")'
+        required: false
+        default: 'all'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      databases: ${{ steps.set-matrix.outputs.databases }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set database matrix
+        id: set-matrix
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.databases }}" != "all" ]; then
+            DBS=$(echo "${{ github.event.inputs.databases }}" | jq -R 'split(",") | map(select(length > 0))')
+          else
+            DBS='["mysql","postgres","percona-server","valkey"]'
+          fi
+          echo "databases=$DBS" >> $GITHUB_OUTPUT
+
+  build-and-push:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        database: ${{ fromJson(needs.prepare.outputs.databases) }}
+      fail-fast: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Generate Dockerfiles
+        run: |
+          chmod +x ./build.sh
+          ./build.sh --db ${{ matrix.database }}
+
+      - name: Build and push images
+        run: |
+          # Find all generated Dockerfiles for this database
+          for dockerfile_dir in build/${{ matrix.database }}/*/; do
+            if [ -f "${dockerfile_dir}Dockerfile" ]; then
+              version=$(basename "$dockerfile_dir")
+              image_name="${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.database }}"
+
+              echo "Building ${image_name}:${version}"
+
+              # Build and push version-specific tag
+              docker buildx build \
+                --platform linux/amd64,linux/arm64 \
+                --tag "${image_name}:${version}" \
+                --push \
+                "${dockerfile_dir}"
+
+              # For the latest version, also tag as 'latest'
+              if [ "$version" = "$(ls -1v build/${{ matrix.database }}/ | tail -n1)" ]; then
+                echo "Tagging ${image_name}:latest"
+                docker buildx build \
+                  --platform linux/amd64,linux/arm64 \
+                  --tag "${image_name}:latest" \
+                  --push \
+                  "${dockerfile_dir}"
+              fi
+            fi
+          done
+
+      - name: Generate image summary
+        run: |
+          echo "## Built Images for ${{ matrix.database }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          for version in build/${{ matrix.database }}/*/; do
+            version=$(basename "$version")
+            echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.database }}:${version}\`" >> $GITHUB_STEP_SUMMARY
+          done
+
+  summary:
+    needs: [prepare, build-and-push]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Build summary
+        run: |
+          echo "## Daily Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Date:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Databases:** ${{ needs.prepare.outputs.databases }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All images have been built and pushed to GitHub Container Registry." >> $GITHUB_STEP_SUMMARY
