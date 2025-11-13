@@ -1,0 +1,18 @@
+FROM percona/percona-server:{{VERSION}}
+
+# Add devdocker entrypoint script
+COPY entrypoint.sh /usr/local/bin/devdocker-entrypoint.sh
+RUN chmod +x /usr/local/bin/devdocker-entrypoint.sh
+
+# Override the default entrypoint
+ENTRYPOINT ["/usr/local/bin/devdocker-entrypoint.sh"]
+
+# Keep the default command
+CMD ["mysqld"]
+
+# Add labels
+LABEL maintainer="Durable Programming <commercial@durableprogramming.com>"
+LABEL org.opencontainers.image.title="Durable Devdocker Percona Server"
+LABEL org.opencontainers.image.description="Percona Server {{VERSION}} with dynamic environment variable support for development"
+LABEL org.opencontainers.image.version="{{VERSION}}"
+LABEL org.opencontainers.image.source="https://github.com/durableprogramming/durable-devdocker-images"
